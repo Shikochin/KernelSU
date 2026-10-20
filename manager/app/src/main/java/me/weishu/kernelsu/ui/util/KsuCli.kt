@@ -356,14 +356,68 @@ private fun writeLkmFile(lkm: LkmSelection): File? {
     return file
 }
 
+// A single module name as accepted by ksud's --block-module parser.
+private fun isValidBlockModuleName(name: String): Boolean =
+    name.isNotEmpty() && name.length <= 64 &&
+        name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '_' }
+
+/** Parse the comma-separated block-modules field into the non-empty names. */
+fun parseBlockModules(input: String): List<String> =
+    input.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+@Parcelize
+internal data class BlockModulesInput(
+    val text: String = "",
+    private val finalNameConfirmed: Boolean = false,
+) : Parcelable {
+    // A selected name needs no trailing comma; an unfinished query is never installed.
+    val selectedModules: List<String>
+        get() = parseBlockModules(if (finalNameConfirmed) text else text.substringBeforeLast(',', "")).distinct()
+
+    val searchQuery: String
+        get() = if (finalNameConfirmed) "" else text.substringAfterLast(',').trim()
+
+    fun edit(text: String): BlockModulesInput = if (text == this.text) this else BlockModulesInput(text)
+
+    fun toggle(name: String, checked: Boolean): BlockModulesInput {
+        val selected = selectedModules
+        val names = if (checked) selected + name else selected.filterNot { it == name }
+        return fromSelected(names)
+    }
+
+    companion object {
+        fun fromSelected(names: List<String>): BlockModulesInput =
+            BlockModulesInput(names.distinct().joinToString(","), finalNameConfirmed = true)
+    }
+}
+
+// The kernel copies the block_modules= value into a 256-byte buffer, leaving
+// 255 bytes; a longer list would be silently truncated, leaving some modules
+// unblocked. Reject it here too.
+private const val MAX_BLOCK_MODULES_LEN = 255
+
+/** Whether every name in the block-modules field is valid (empty is valid). */
+fun isBlockModulesValid(input: String): Boolean {
+    val names = parseBlockModules(input)
+    return names.all(::isValidBlockModuleName) &&
+        names.joinToString(",").length <= MAX_BLOCK_MODULES_LEN
+}
+
 private fun bootPatchFlags(
     allowShell: Boolean,
     enableAdb: Boolean,
     forceBackup: Boolean,
+    blockModules: String,
 ): String = buildString {
     if (allowShell) append(" --allow-shell")
     if (enableAdb) append(" --enable-adbd")
     if (forceBackup) append(" --backup")
+    // Names are validated in the UI before install; pass them through without
+    // mutating. Drop the flag entirely (never inject) if anything slips through.
+    val names = parseBlockModules(blockModules)
+    if (names.isNotEmpty() && isBlockModulesValid(blockModules)) {
+        append(" --block-module ${names.joinToString(",")}")
+    }
 }
 
 fun installBoot(
@@ -374,6 +428,7 @@ fun installBoot(
     allowShell: Boolean,
     enableAdb: Boolean,
     forceBackup: Boolean,
+    blockModules: String,
     onStdout: (String) -> Unit,
     onStderr: (String) -> Unit,
 ): FlashResult {
@@ -398,7 +453,7 @@ fun installBoot(
     } else {
         " -b ${bootFile.absolutePath}"
     }
-    cmd += bootPatchFlags(allowShell, enableAdb, forceBackup)
+    cmd += bootPatchFlags(allowShell, enableAdb, forceBackup, blockModules)
 
     if (ota) {
         cmd += " -u"
@@ -442,6 +497,7 @@ fun downloadBoot(
     allowShell: Boolean,
     enableAdb: Boolean,
     forceBackup: Boolean,
+    blockModules: String,
     onStdout: (String) -> Unit,
     onStderr: (String) -> Unit,
 ): FlashResult {
@@ -498,7 +554,7 @@ fun downloadBoot(
     }
 
     var cmd = "${getKsuDaemonPath()} boot-patch -b ${bootFile.absolutePath}"
-    cmd += bootPatchFlags(allowShell, enableAdb, forceBackup)
+    cmd += bootPatchFlags(allowShell, enableAdb, forceBackup, blockModules)
 
     val lkmFile = writeLkmFile(lkm)
     if (lkmFile != null) {
@@ -624,6 +680,43 @@ suspend fun getAvailablePartitions(): List<String> = withContext(Dispatchers.IO)
     val cmd = "boot-info available-partitions"
     val out = shell.newJob().add("${getKsuDaemonPath()} $cmd").to(ArrayList(), null).exec().out
     out.filter { it.isNotBlank() }.map { it.trim() }
+}
+
+internal fun parseLoadedKernelModules(lines: List<String>): List<String> =
+    lines.map { it.trim().takeWhile { char -> !char.isWhitespace() } }
+        .filter(::isValidBlockModuleName)
+        .distinct()
+        .sorted()
+
+internal fun parseBlockedKernelModules(input: String): List<String> =
+    parseBlockModules(input).filter(::isValidBlockModuleName).distinct().sorted()
+
+data class KernelModuleState(
+    val loaded: List<String>? = null,
+    val blocked: List<String>? = null,
+) {
+    fun availableModules(selected: Collection<String>, query: String = ""): List<String> {
+        val selectedNames = selected.toSet()
+        return (loaded.orEmpty() + blocked.orEmpty() + selected)
+            .filter(::isValidBlockModuleName)
+            .distinct()
+            .filter { it.contains(query, ignoreCase = true) }
+            .sortedWith(compareBy<String> { it !in selectedNames }.thenBy { it })
+    }
+}
+
+// null distinguishes an unreadable source from an empty list. The native
+// blacklist includes names installed by KernelSU, even though those modules
+// cannot appear in /proc/modules after boot.
+suspend fun getKernelModuleState(): KernelModuleState = withContext(Dispatchers.IO) {
+    val shell = getRootShell()
+    val loaded = shell.newJob().add("cat /proc/modules").to(ArrayList(), null).exec()
+    val blocked = shell.newJob().add("cat /sys/module/kernel/parameters/module_blacklist")
+        .to(ArrayList(), null).exec()
+    KernelModuleState(
+        loaded = if (loaded.isSuccess) parseLoadedKernelModules(loaded.out) else null,
+        blocked = if (blocked.isSuccess) parseBlockedKernelModules(blocked.out.joinToString("\n")) else null,
+    )
 }
 
 fun hasMagisk(): Boolean {

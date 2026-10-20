@@ -3,14 +3,18 @@ package me.weishu.kernelsu.ui.screen.install
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,14 +27,18 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -42,6 +50,7 @@ import me.weishu.kernelsu.ui.component.material.ExpressiveScaffold
 import me.weishu.kernelsu.ui.component.material.SegmentedCheckboxItem
 import me.weishu.kernelsu.ui.component.material.SegmentedColumn
 import me.weishu.kernelsu.ui.component.material.SegmentedDropdownItem
+import me.weishu.kernelsu.ui.component.material.SegmentedItem
 import me.weishu.kernelsu.ui.component.material.SegmentedListItem
 import me.weishu.kernelsu.ui.component.material.SegmentedRadioItem
 import me.weishu.kernelsu.ui.component.material.SnackBarHost
@@ -195,12 +204,84 @@ internal fun InstallScreenMaterial(
                         onCheckedChange = actions.onSelectEnableAdb,
                     )
                 }
+                item(visible = uiState.advancedOptionsShown) {
+                    SegmentedCheckboxItem(
+                        title = stringResource(id = R.string.install_block_modules),
+                        summary = stringResource(id = R.string.install_block_modules_warning),
+                        checked = uiState.blockModulesEnabled,
+                        onCheckedChange = actions.onSelectBlockModules,
+                    )
+                }
+                item(visible = uiState.advancedOptionsShown && uiState.blockModulesEnabled) {
+                    OutlinedTextField(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        value = uiState.blockModules,
+                        onValueChange = actions.onBlockModulesChange,
+                        label = { Text(stringResource(id = R.string.install_block_modules_list)) },
+                        supportingText = {
+                            Text(
+                                stringResource(
+                                    if (uiState.blockModulesValid) {
+                                        R.string.install_block_modules_summary
+                                    } else {
+                                        R.string.install_block_modules_invalid
+                                    }
+                                )
+                            )
+                        },
+                        isError = !uiState.blockModulesValid,
+                        singleLine = true,
+                    )
+                }
+                item(visible = uiState.advancedOptionsShown) {
+                    Column {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.install_loaded_modules),
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                enabled = !uiState.loadedModulesLoading,
+                                onClick = actions.onRefreshLoadedModules,
+                            ) { Text(stringResource(R.string.install_loaded_modules_refresh)) }
+                        }
+                        uiState.loadedModulesStatus?.let {
+                            Text(
+                                text = stringResource(it),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        LazyColumn(
+                            modifier = Modifier.heightIn(max = 300.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            itemsIndexed(uiState.kernelModules, key = { _, name -> name }) { index, name ->
+                                SegmentedItem(index = index, count = uiState.kernelModules.size) {
+                                    SegmentedCheckboxItem(
+                                        title = name,
+                                        summary = stringResource(uiState.kernelModuleSummary(name)),
+                                        checked = name in uiState.selectedBlockModules,
+                                        enabled = uiState.blockModulesEnabled,
+                                        onCheckedChange = { actions.onSelectLoadedModule(name, it) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Button(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                enabled = uiState.installMethod != null,
+                enabled = uiState.installMethod != null && uiState.blockModulesValid && !uiState.loadedModulesLoading,
                 onClick = actions.onNext
             ) { Text(stringResource(R.string.install_next)) }
         }

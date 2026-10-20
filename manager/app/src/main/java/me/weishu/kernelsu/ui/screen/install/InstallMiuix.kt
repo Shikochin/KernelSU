@@ -20,12 +20,14 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -39,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import me.weishu.kernelsu.R
 import me.weishu.kernelsu.ui.component.dialog.rememberConfirmDialog
 import me.weishu.kernelsu.ui.theme.LocalEnableBlur
@@ -55,7 +58,9 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.layerBackdrop
@@ -270,6 +275,73 @@ internal fun InstallScreenMiuix(
                                     summary = stringResource(id = R.string.enable_adb_summary),
                                     onCheckedChange = actions.onSelectEnableAdb
                                 )
+                                CheckboxPreference(
+                                    title = stringResource(id = R.string.install_block_modules),
+                                    checked = uiState.blockModulesEnabled,
+                                    summary = stringResource(id = R.string.install_block_modules_warning),
+                                    onCheckedChange = actions.onSelectBlockModules
+                                )
+                                if (uiState.blockModulesEnabled) {
+                                    TextField(
+                                        value = uiState.blockModules,
+                                        onValueChange = actions.onBlockModulesChange,
+                                        label = stringResource(id = R.string.install_block_modules_list),
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                    Text(
+                                        text = stringResource(
+                                            if (uiState.blockModulesValid) {
+                                                R.string.install_block_modules_summary
+                                            } else {
+                                                R.string.install_block_modules_invalid
+                                            }
+                                        ),
+                                        fontSize = 12.sp,
+                                        color = if (uiState.blockModulesValid) {
+                                            colorScheme.onSurfaceVariantSummary
+                                        } else {
+                                            colorScheme.error
+                                        },
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.install_loaded_modules),
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(
+                                        text = stringResource(R.string.install_loaded_modules_refresh),
+                                        enabled = !uiState.loadedModulesLoading,
+                                        onClick = actions.onRefreshLoadedModules,
+                                    )
+                                }
+                                uiState.loadedModulesStatus?.let {
+                                    Text(
+                                        text = stringResource(it),
+                                        fontSize = 12.sp,
+                                        color = colorScheme.onSurfaceVariantSummary,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    )
+                                }
+                                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                                    items(uiState.kernelModules, key = { it }) { name ->
+                                        CheckboxPreference(
+                                            title = name,
+                                            summary = stringResource(uiState.kernelModuleSummary(name)),
+                                            checked = name in uiState.selectedBlockModules,
+                                            enabled = uiState.blockModulesEnabled,
+                                            onCheckedChange = { actions.onSelectLoadedModule(name, it) },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -278,7 +350,7 @@ internal fun InstallScreenMiuix(
                             .fillMaxWidth()
                             .padding(top = 12.dp),
                         text = stringResource(id = R.string.install_next),
-                        enabled = uiState.installMethod != null,
+                        enabled = uiState.installMethod != null && uiState.blockModulesValid && !uiState.loadedModulesLoading,
                         colors = ButtonDefaults.textButtonColorsPrimary(),
                         onClick = actions.onNext
                     )

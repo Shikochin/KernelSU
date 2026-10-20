@@ -32,12 +32,16 @@ import me.weishu.kernelsu.ui.component.dialog.rememberLoadingDialog
 import me.weishu.kernelsu.ui.navigation3.LocalNavigator
 import me.weishu.kernelsu.ui.navigation3.Route
 import me.weishu.kernelsu.ui.screen.flash.FlashIt
+import me.weishu.kernelsu.ui.util.BlockModulesInput
+import me.weishu.kernelsu.ui.util.KernelModuleState
 import me.weishu.kernelsu.ui.util.LkmSelection
 import me.weishu.kernelsu.ui.util.getAvailablePartitions
 import me.weishu.kernelsu.ui.util.getCurrentKmi
 import me.weishu.kernelsu.ui.util.getDefaultPartition
+import me.weishu.kernelsu.ui.util.getKernelModuleState
 import me.weishu.kernelsu.ui.util.getSlotSuffix
 import me.weishu.kernelsu.ui.util.isAbDevice
+import me.weishu.kernelsu.ui.util.isBlockModulesValid
 import me.weishu.kernelsu.ui.util.probeRemoteBootPartitions
 import me.weishu.kernelsu.ui.util.rootAvailable
 import top.yukonga.miuix.kmp.basic.SnackbarHostState as MiuixSnackbarHostState
@@ -66,6 +70,37 @@ fun InstallScreen() {
     var allowShell by rememberSaveable { mutableStateOf(false) }
     var enableAdb by rememberSaveable { mutableStateOf(false) }
     var forceBackup by rememberSaveable { mutableStateOf(false) }
+    var blockModulesEnabled by rememberSaveable { mutableStateOf(false) }
+    var blockModulesInput by rememberSaveable { mutableStateOf(BlockModulesInput()) }
+    var kernelModuleState by remember { mutableStateOf(KernelModuleState()) }
+    var blockModulesInitialized by rememberSaveable { mutableStateOf(false) }
+    var blockModulesEdited by rememberSaveable { mutableStateOf(false) }
+    var loadedModulesLoading by remember { mutableStateOf(false) }
+    // Preserve the running kernel's blacklist without selecting any new names.
+    val selectedModules = blockModulesInput.selectedModules
+    val effectiveBlockModules = if (blockModulesEnabled) selectedModules.joinToString(",") else ""
+
+    fun refreshLoadedModules() {
+        if (loadedModulesLoading) return
+        loadedModulesLoading = true
+        scope.launch {
+            try {
+                val detected = getKernelModuleState()
+                kernelModuleState = detected
+                if (!blockModulesInitialized && !blockModulesEdited && detected.blocked != null) {
+                    blockModulesInput = BlockModulesInput.fromSelected(detected.blocked)
+                    blockModulesEnabled = detected.blocked.isNotEmpty()
+                    blockModulesInitialized = true
+                }
+            } finally {
+                loadedModulesLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshLoadedModules()
+    }
 
     val currentKmi by produceState(initialValue = "") { value = getCurrentKmi() }
     val partitions by produceState(initialValue = emptyList()) { value = getAvailablePartitions() }
@@ -120,8 +155,11 @@ fun InstallScreen() {
         }
     }
 
+    val blockModulesInvalidMessage = stringResource(R.string.install_block_modules_invalid)
     val onInstall = {
-        installMethod?.let { method ->
+        if (!isBlockModulesValid(effectiveBlockModules)) {
+            showMessage(blockModulesInvalidMessage)
+        } else installMethod?.let { method ->
             navigator.push(
                 Route.Flash(
                     when (method) {
@@ -131,7 +169,8 @@ fun InstallScreen() {
                             lkm = lkmSelection,
                             allowShell = allowShell,
                             enableAdb = enableAdb,
-                            backup = forceBackup
+                            backup = forceBackup,
+                            blockModules = effectiveBlockModules
                         )
                         else -> FlashIt.FlashBoot(
                             boot = if (method is InstallMethod.SelectFile) method.uri else null,
@@ -140,7 +179,8 @@ fun InstallScreen() {
                             partition = partitions.getOrNull(partitionSelectionIndex),
                             allowShell = allowShell,
                             enableAdb = enableAdb,
-                            backup = method is InstallMethod.SelectFile && forceBackup
+                            backup = method is InstallMethod.SelectFile && forceBackup,
+                            blockModules = effectiveBlockModules
                         )
                     }
                 )
@@ -236,6 +276,13 @@ fun InstallScreen() {
         enableAdb = enableAdb,
         forceBackup = forceBackup,
         canForceBackup = installMethod is InstallMethod.SelectFile,
+        blockModulesEnabled = blockModulesEnabled,
+        blockModules = blockModulesInput.text,
+        moduleSearchQuery = blockModulesInput.searchQuery,
+        blockModulesValid = isBlockModulesValid(effectiveBlockModules),
+        kernelModuleState = kernelModuleState,
+        loadedModulesLoading = loadedModulesLoading,
+        selectedBlockModules = selectedModules.toSet(),
     )
     val actions = InstallScreenActions(
         onBack = dropUnlessResumed { navigator.pop() },
@@ -285,7 +332,20 @@ fun InstallScreen() {
         },
         onSelectForceBackup = {
             forceBackup = it
-        }
+        },
+        onSelectBlockModules = {
+            blockModulesEdited = true
+            blockModulesEnabled = it
+        },
+        onBlockModulesChange = {
+            blockModulesEdited = true
+            blockModulesInput = blockModulesInput.edit(it)
+        },
+        onRefreshLoadedModules = ::refreshLoadedModules,
+        onSelectLoadedModule = { name, checked ->
+            blockModulesEdited = true
+            blockModulesInput = blockModulesInput.toggle(name, checked)
+        },
     )
 
     when (LocalUiMode.current) {
